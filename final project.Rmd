@@ -1,0 +1,179 @@
+---
+title: "p8130_final_project"
+author: "Senna"
+date: "2024-12-14"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(ResourceSelection)
+library(car)
+
+```
+
+```{r}
+# read data file and check if there is a missing value
+surv_data = read_csv("Project_2_data.csv")
+
+any(is.na(surv_data)) # FALSE
+
+# check all vairiables' info
+summary(surv_data)
+
+```
+
+```{r}
+surv_data = surv_data |>
+  janitor::clean_names() |>
+  rename(regional_node_positive = reginol_node_positive) |>
+  mutate(
+    positive_ratio = regional_node_positive/regional_node_examined,
+    status = ifelse(status == "Alive", 0, 1)
+  )|>
+  mutate(across(where(is.character), as.factor))
+
+
+head(surv_data)
+```
+
+# Trying Cox Proportional Hazards Model
+```{r}
+# Load survival package
+library(survival)
+
+# Fit a Cox proportional hazards model
+cox_model <- coxph(Surv(survival_months, status) ~ age + race + marital_status +
+                    t_stage + n_stage + x6th_stage +
+                    differentiate + grade + a_stage + tumor_size +
+                    estrogen_status + progesterone_status +
+                    regional_node_examined + regional_node_positive, 
+                    data = surv_data)
+
+# View model summary
+summary(cox_model)
+```
+# assess performance of the model
+
+concordance index : The C-index ranges from 0.5 (no better than random chance) to 1 (perfect discrimination). A higher C-index indicates better model performance.
+```{r}
+
+# Compute the concordance index
+concordance.index <- survConcordance(surv_object ~ predict(cox_model, type = "risk"), data = surv_data)
+
+# Print the concordance index
+print(concordance.index)
+
+# why is this not working
+
+```
+
+Log liklihood / likelihood ratio test: The log-likelihood indicates how well the model fits the data. A higher log-likelihood suggests a better fit.
+```{r}
+# Log-likelihood value
+logLik(cox_model)
+
+# Likelihood ratio test between two models
+anova(cox_model, test = "LRT")
+```
+
+
+
+# Assumptions:
+1. Proportional Hazards Assumption
+The core assumption of the Cox model is that the hazard ratios between groups are constant over time. This means that the effect of the covariates on the hazard rate is proportional and does not change over time. To check for this assumption:
+
+Use statistical tests like Schoenfeld residuals test.
+Plot the scaled Schoenfeld residuals for each covariate over time.
+
+More conditions to be met for optimal performance of the model
+## linearity of continuous variables, independence of survival terms, no time varying covariates, minimal ties (when two or more individuals experience the event at the same time), no extreme outliers or influential points, balanced data, no multicollinearity
+
+
+1. Check proportional hazards assumptions with the Schoenfeld Residuals test
+```{r}
+# Test for proportional hazards assumption using Schoenfeld residuals
+ph_test <- cox.zph(cox_model)
+
+# Display test results
+print(ph_test)
+```
+P values for a covariate < 0.5 --> suggests a violation of the proportion hazards assumption for that covariate. 
+
+** n_stage, x6th_stage, a_stage, tumor_size, estrogen_status, progesterone status
+
+```{r}
+plot(ph_test)
+```
+If the residuals show a random scatter with no clear trend or pattern, it suggests that the proportional hazards assumption holds.
+If there is a visible pattern or trend, it indicates that the assumption might be violated for that covariate.
+
+
+# Residual Analysis: helps indentify influential data points, outliers, or poor fit in the model
+
+Martingale residuals: Can be used to assess the fit of the model. A plot of martingale residuals against covariates should show no clear pattern.
+Deviance residuals: These are useful for detecting outliers.
+Schoenfeld residuals: Used for checking the proportional hazards assumption.
+
+```{r}
+# Martingale residuals plot
+plot(cox_model$residuals ~ dataset$covariates)
+
+# Deviance residuals plot
+plot(cox_model$residuals)
+
+```
+
+# influential points and leverage
+ou can assess influential points using dfbeta (influence on regression coefficients) and dffit (influence on fitted values). These can be plotted to check for any data points that have a large effect on the model.
+```{r}
+dfbeta(cox_model)
+dffit(cox_model)
+
+```
+
+
+# check for multicollinearity
+Multicollinearity between predictors can affect the stability of the model. You can assess this using the variance inflation factor (VIF).
+```{r}
+library(car)
+vif(cox_model)
+
+```
+
+
+
+# cross validation
+```{r}
+library(survival)
+library(caret)
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold cross-validation
+cox_cv <- train(Surv(time, status) ~ covariates, data = dataset, method = "coxph", trControl = train_control)
+summary(cox_cv)
+```
+ 
+#  Akaike Information Criterion (AIC) and Bayesian Information Criterion (BIC)
+AIC and BIC are measures used to compare the relative fit of different models. Lower values of AIC and BIC indicate a better-fitting model, penalizing for adding too many variables.
+```{r}
+AIC(cox_model)
+BIC(cox_model)
+
+```
+
+
+
+
+
+
+
+Assumption is violated. What next?
+1. Stratify the model by violating covariates
+2. if covariate's effect change over time, include it as time-varying covariate in the model. (create interaction term between covariate and time)
+3. check for non linear effects. 
+
+2. is very likely... prognosis ... 
+chat gpt says:
+Time-Varying: n_stage, x6th_stage, a_stage, and tumor_size could all vary over time as the disease progresses or responds to treatment. These would likely be treated as time-varying covariates in survival analysis.
+
+Not Time-Varying: Estrogen_status and progesterone_status are generally fixed after diagnosis and do not change over time under typical circumstances, so they would not be treated as time-varying covariates.
+
