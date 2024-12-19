@@ -29,7 +29,9 @@ surv_data = surv_data |>
   rename(regional_node_positive = reginol_node_positive) |>
   mutate(
     positive_ratio = regional_node_positive/regional_node_examined,
-    status = ifelse(status == "Alive", 0, 1)
+    status = ifelse(status == "Alive", 0, 1),
+    estrogen_status = ifelse(estrogen_status == "Positive", 1,0),
+    progesterone_status = ifelse(progesterone_status == "Positive", 1,0)
   )|>
   mutate(across(where(is.character), as.factor))
 
@@ -43,40 +45,38 @@ head(surv_data)
 library(survival)
 
 # Fit a Cox proportional hazards model
-cox_model <- coxph(Surv(survival_months, status) ~ age + race + marital_status +
-                    t_stage + n_stage + x6th_stage +
-                    differentiate + grade + a_stage + tumor_size +
-                    estrogen_status + progesterone_status +
-                    regional_node_examined + regional_node_positive, 
-                    data = surv_data)
+cox_model <- coxph(Surv(survival_months, status) ~ age + race + marital_status + t_stage + n_stage + x6th_stage + differentiate + grade + a_stage + tumor_size + estrogen_status + progesterone_status + regional_node_examined + regional_node_positive, data = surv_data)
 
 # View model summary
 summary(cox_model)
 ```
+
+NA coefficients; colliearity? -->
+remove these variables: x6th stage, grade
+
+```{r}
+cox_2<- coxph(Surv(survival_months, status) ~ age + race + marital_status + t_stage + n_stage  + differentiate + a_stage + tumor_size + estrogen_status + progesterone_status + regional_node_examined + regional_node_positive, data = surv_data)
+
+# View model summary
+summary(cox_2)
+```
+
+
+
 # assess performance of the model
 
 concordance index : The C-index ranges from 0.5 (no better than random chance) to 1 (perfect discrimination). A higher C-index indicates better model performance.
 ```{r}
+surv_object <- Surv(surv_data$survival_months, surv_data$status)
 
 # Compute the concordance index
-concordance.index <- survConcordance(surv_object ~ predict(cox_model, type = "risk"), data = surv_data)
+concordance.index <- survConcordance(surv_object ~ predict(cox_2, type = "risk"), data = surv_data)
 
 # Print the concordance index
 print(concordance.index)
 
-# why is this not working
-
 ```
-
-Log liklihood / likelihood ratio test: The log-likelihood indicates how well the model fits the data. A higher log-likelihood suggests a better fit.
-```{r}
-# Log-likelihood value
-logLik(cox_model)
-
-# Likelihood ratio test between two models
-anova(cox_model, test = "LRT")
-```
-
+0.744: acceptable discrimination. In 74% of the cases, the model correctly ranks pairs of individuals in terms of who experiences the event sooner
 
 
 # Assumptions:
@@ -93,21 +93,17 @@ More conditions to be met for optimal performance of the model
 1. Check proportional hazards assumptions with the Schoenfeld Residuals test
 ```{r}
 # Test for proportional hazards assumption using Schoenfeld residuals
-ph_test <- cox.zph(cox_model)
+ph_test <- cox.zph(cox_2)
 
 # Display test results
 print(ph_test)
 ```
 P values for a covariate < 0.5 --> suggests a violation of the proportion hazards assumption for that covariate. 
 
-** n_stage, x6th_stage, a_stage, tumor_size, estrogen_status, progesterone status
+** n_stage, a_stage, tumor_size, estrogen_status, progesterone status have p values smaller than 0.5. Should we exclude these? 
 
-```{r}
-plot(ph_test)
-```
 If the residuals show a random scatter with no clear trend or pattern, it suggests that the proportional hazards assumption holds.
 If there is a visible pattern or trend, it indicates that the assumption might be violated for that covariate.
-
 
 # Residual Analysis: helps indentify influential data points, outliers, or poor fit in the model
 
@@ -117,19 +113,52 @@ Schoenfeld residuals: Used for checking the proportional hazards assumption.
 
 ```{r}
 # Martingale residuals plot
-plot(cox_model$residuals ~ dataset$covariates)
+martingale_residuals <- residuals(cox_2, type = "martingale")
+plot(martingale_residuals, main = "Martingale Residuals", ylab = "Residuals")
+
 
 # Deviance residuals plot
-plot(cox_model$residuals)
+deviance_residuals <- residuals(cox_2, type = "deviance")
+plot(deviance_residuals, main = "Deviance Residuals", ylab = "Residuals")
 
+# relationship between residuals and covariates
+plot(surv_data$n_stage, martingale_residuals, main = "Martingale Residuals vs covariate", 
+     xlab = "covariate", ylab = "Martingale Residuals")
+
+plot(surv_data$a_stage, martingale_residuals, main = "Martingale Residuals vs covariate", 
+     xlab = "covariate", ylab = "Martingale Residuals")
+
+plot(surv_data$tumor_size, martingale_residuals, main = "Martingale Residuals vs covariate", 
+     xlab = "covariate", ylab = "Martingale Residuals")
+
+plot(surv_data$estrogen_status, martingale_residuals, main = "Martingale Residuals vs covariate", 
+     xlab = "covariate", ylab = "Martingale Residuals")
+
+plot(surv_data$progesterone_status, martingale_residuals, main = "Martingale Residuals vs covariate", 
+     xlab = "covariate", ylab = "Martingale Residuals")
+```
+
+Those variables could be time varying
+
+```{r}
+cox_3 <- coxph(Surv(survival_months, status) ~ age + race + marital_status +
+               tt(n_stage) + tt(a_stage) + tt(tumor_size) + estrogen_status + 
+               progesterone_status + regional_node_examined + regional_node_positive, 
+               data = surv_data, 
+               tt = function(x, t, ...) x * log(t)) 
+## data contains an infinite predictor????
 ```
 
 # influential points and leverage
-ou can assess influential points using dfbeta (influence on regression coefficients) and dffit (influence on fitted values). These can be plotted to check for any data points that have a large effect on the model.
-```{r}
-dfbeta(cox_model)
-dffit(cox_model)
+Use influence diagnostics (e.g., dfbetas, deviance residuals, or Cook's distance) to identify outliers or influential points.
 
+You can assess influential points using dfbeta (influence on regression coefficients) and dffit (influence on fitted values). These can be plotted to check for any data points that have a large effect on the model.
+```{r}
+# Compute DFBETAs
+dfbeta_values <- residuals(cox_2, type = "dfbeta")
+
+# View the DFBETAs for each predictor
+head(dfbeta_values)
 ```
 
 
@@ -137,10 +166,16 @@ dffit(cox_model)
 Multicollinearity between predictors can affect the stability of the model. You can assess this using the variance inflation factor (VIF).
 ```{r}
 library(car)
-vif(cox_model)
 
+# Compute condition index and variance decomposition proportions
+collinearity <- vif(cox_2, tol = TRUE)
+print(collinearity)
 ```
 
+VIF (Variance Inflation Factor) measures how much the variance of the estimated regression coefficients is inflated due to collinearity with other predictors in the model.
+A VIF value of 1 indicates no collinearity for a particular predictor, meaning that the predictor is not correlated with other predictors.
+A VIF value greater than 1 indicates the presence of collinearity. As the value increases, it suggests stronger collinearity with other variables in the model.
+VIF values above 5 or 10 are typically considered as indicators of high multicollinearity, meaning that the variable is highly correlated with other predictors. This could cause issues in interpreting the model, as it makes the coefficients unstable and increases the standard errors.
 
 
 # cross validation
@@ -148,22 +183,15 @@ vif(cox_model)
 library(survival)
 library(caret)
 train_control <- trainControl(method = "cv", number = 10)  # 10-fold cross-validation
-cox_cv <- train(Surv(time, status) ~ covariates, data = dataset, method = "coxph", trControl = train_control)
-summary(cox_cv)
+
 ```
  
 #  Akaike Information Criterion (AIC) and Bayesian Information Criterion (BIC)
 AIC and BIC are measures used to compare the relative fit of different models. Lower values of AIC and BIC indicate a better-fitting model, penalizing for adding too many variables.
 ```{r}
-AIC(cox_model)
-BIC(cox_model)
+
 
 ```
-
-
-
-
-
 
 
 Assumption is violated. What next?
