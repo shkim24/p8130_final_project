@@ -1,0 +1,564 @@
+---
+title: "model building"
+author: "Elaine"
+output: html_document
+---
+
+Import necessary libraries
+```{r, message=FALSE}
+library(dplyr)
+library(funModeling)
+library(MASS)
+library(gridExtra)
+library(tidyverse)
+library(corrplot)
+library(Hmisc)
+library(survival)
+library(survminer)
+library(ggplot2)
+library(ggpubr)
+library(magrittr)
+library(knitr)
+library(rms)
+library(foreign)
+library(pROC)
+library(timeROC)
+```
+
+## Data Processing
+Import and clean the dataset
+```{r, message=FALSE}
+# read data file and check if there is a missing value
+surv_data = read_csv("Project_2_data.csv")|>
+  janitor::clean_names() |>
+  rename(regional_node_positive = reginol_node_positive) |>
+  mutate(
+    positive_ratio = regional_node_positive/regional_node_examined,
+    status = ifelse(status == "Alive", 0, 1)
+      ) |>
+  mutate(
+    grade = case_when(
+      grade == "1" ~ 1,
+      grade == "2" ~ 2,
+      grade == "3" ~ 3,
+      grade == "anaplastic; Grade IV" ~ 4)) |>
+  mutate(across(where(is.character), as.factor))|>
+  relocate(status, survival_months, everything())
+
+any(is.na(surv_data)) # FALSE
+
+summary(surv_data) |>
+  knitr::kable()
+```
+Checking the correlation between numerical variables
+```{r}
+cor_matrix = surv_data |>
+  select_if(is.numeric) |>
+  cor() 
+corrplot::corrplot(cor_matrix, 
+                   type = "upper",
+                   diag = FALSE, 
+                   addCoef.col = "black",
+                   tl.col = "black",
+                   tl.srt = 45)
+```
+The correlation matrix shows that the numerical variables in the dataset have low to moderate correlations with each other. The relatively higher correlation among `reginal_node_positive`, `reginal_node_examined`, and `positive_ratio` is expected. In the later analysis, we will only consider positive ratio for model building.
+
+Check the correlation between categorical variables
+```{r, warning=FALSE}
+
+categorical_vars <- surv_data |>
+  select_if(is.factor)
+
+association_test <- function(var1, var2) {
+  
+  cont_table <- table(var1, var2)
+  chi_test <- chisq.test(cont_table)
+  n <- sum(cont_table)
+  min_dim <- min(dim(cont_table)) - 1
+  cramer_v <- sqrt(chi_test$statistic / (n * min_dim))
+  
+  return(list(
+    chi_square = chi_test$statistic,
+    p_value = chi_test$p.value,
+    cramer_v = cramer_v
+  ))
+}
+
+results <- list()
+var_names <- names(categorical_vars)
+for(i in 1:(length(var_names)-1)) {
+  for(j in (i+1):length(var_names)) {
+    var1 <- var_names[i]
+    var2 <- var_names[j]
+    
+    test_result <- association_test(
+      categorical_vars[[var1]], 
+      categorical_vars[[var2]]
+    )
+    
+    results[[paste(var1, var2, sep="-")]] <- c(
+      test_result,
+      list(var1 = var1, var2 = var2)
+    )
+  }
+}
+
+results_df <- do.call(rbind, lapply(results, function(x) {
+  data.frame(
+    Variable1 = x$var1,
+    Variable2 = x$var2,
+    Chi_Square = x$chi_square,
+    P_Value = x$p_value,
+    Cramers_V = x$cramer_v
+  )
+})) |>
+  arrange(P_Value)
+
+kable(results_df, 
+      digits = 4,
+      col.names = c("var1", "var2", "chi-statistic", "P-value", "Cramer's V"))
+```
+The correlation analysis of categorical variables in this breast cancer dataset reveals several key patterns. The strongest associations are found between staging-related variables, with differentiate-grade showing perfect correlation (Cramer's V = 1.0) and n_stage-x6th_stage displaying very strong correlation (Cramer's V = 0.91). A notable moderate correlation exists between hormone receptor statuses (estrogen_status-progesterone_status, Cramer's V = 0.51), which aligns with biological understanding. While many other associations are statistically significant (p < 0.05), their weaker Cramer's V values (< 0.3) suggest limited practical significance. 
+
+Check the distribution of numerical variables
+```{r}
+surv_data |>
+  funModeling::plot_num()
+```
+Box-Cox transformation
+```{r}
+surv_data = surv_data |>
+  mutate(
+      positive_ratio_transformed = {
+      bc = boxcox(positive_ratio ~ 1, plotit = FALSE)
+      lambda = bc$x[which.max(bc$y)]
+      if(abs(lambda) < 1e-4) {
+        log(positive_ratio)
+      } else {
+        (positive_ratio^lambda - 1) / lambda
+      }
+    }
+  )
+```
+
+```{r}
+p1 <- ggplot(surv_data, aes(x = positive_ratio)) +
+  geom_histogram(fill = "skyblue", bins = 30) +
+  labs(title = "Original Distribution",
+       x = "Positive Ratio")
+
+p2 <- ggplot(surv_data, aes(x = positive_ratio_transformed)) +
+  geom_histogram(fill = "lightgreen", bins = 30) +
+  labs(title = "Transformed Distribution",
+       x = "Transformed Positive Ratio")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+## Model Building
+
+### Kaplan-Meier Survival Analysis
+```{r}
+survfit(Surv(survival_months,status)~race,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("White", "Black", "Other" ),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+```{r}
+survfit(Surv(survival_months,status)~marital_status,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca", "#FFA500", "#FF0000"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Married", "Single", "Separated", "Divored", "Widowed"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+```{r}
+survfit(Surv(survival_months,status)~t_stage,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca", "#FFA500", "#FF0000"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("T1", "T2", "T3", "T4"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+survfit(Surv(survival_months,status)~n_stage,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("N1", "N2", "N3"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+survfit(Surv(survival_months,status)~x6th_stage,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca", "#FFA500", "#FF0000"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("IIA", "IIB", "IIIA","IIIB", "IIIC"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+survfit(Surv(survival_months,status)~differentiate,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca", "#FFA500"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Moderately differentiated", "Poorly differentiated", "Well differentiated", "Undifferentiated"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+survfit(Surv(survival_months,status)~grade,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca", "#FFA500"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("1", "2", "3", "4"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+survfit(Surv(survival_months,status)~a_stage,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Distant","Regional"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+survfit(Surv(survival_months,status)~estrogen_status,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Positive","Negative"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r, message=FALSE}
+survfit(Surv(survival_months,status)~progesterone_status,data = surv_data) |> 
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Positive","Negative"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+surv_data = surv_data |>
+  mutate(age_group = ifelse(age > mean(age, na.rm = TRUE), "Elder", "Young"))
+
+survfit(Surv(survival_months,status)~age_group,data = surv_data) |>
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Young","Elder"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+surv_data <- surv_data |>
+  mutate(tumor_size_group = case_when(
+    tumor_size < 40 ~ "Small (<40)",
+    tumor_size >= 40 & tumor_size < 80 ~ "Medium (40-80)",
+    tumor_size >= 80 & tumor_size < 120 ~ "Large (80-120)",
+    tumor_size >= 120 ~ "Very Large (>120)"
+  ))
+
+ survfit(Surv(survival_months,status)~tumor_size_group,data = surv_data) |>
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca", "#FFA500"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Small (<40)", "Medium (40-80)", "Large (80-120)", "Very Large (>120)"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+
+```{r}
+surv_data <- surv_data |>
+  mutate(positive_ratio_group = case_when(
+    positive_ratio <= 0.25 ~ "Low (0.02-0.25)",
+    positive_ratio > 0.25 & positive_ratio <= 0.5 ~ "Moderate (0.25-0.5)",
+    positive_ratio > 0.5 & positive_ratio <= 0.75 ~ "High (0.5-0.75)",
+    positive_ratio > 0.75 ~ "Very High (0.75-1)"
+  ))
+
+ survfit(Surv(survival_months,status)~positive_ratio_group,data = surv_data) |>
+  ggsurvplot(
+    size = 1,
+    cex.lab= 2,
+    break.time.by = 6,
+    xlim = c(0,107),
+    axis.title.x =element_text(size=5), 
+    axis.title.y = element_text(size=5),
+    palette = c("#54A136", "#C757A0", "#3291ca", "#FFA500"),
+    conf.int = TRUE,
+    pval = TRUE,
+    risk.table = TRUE,
+    xlab = "Follow-up months", 
+    ylab="Survival probability ",
+    risk.table.col = "strata",
+    risk.table.fontsize = 3, 
+    legend.labs =  c("Low (0.02-0.25)", "Moderate (0.25-0.5)", "High (0.5-0.75)", "Very High (0.75-1)"),
+    risk.table.height = 0.3, 
+    ggtheme = theme_bw()
+    )
+```
+- All the Kaplan-Meier survival analyses show significant differences in survival probabilities among different groups of each variable.[ Log-rank test: p-value < 0.05]
+
+## Univariate Cox Regression Model
+
+\( h(t) = h_0(t) \exp(\beta_1 X) \)
+
+```{r}
+surv_object <- with(surv_data, Surv(survival_months, status))
+
+result_unicox <- data.frame("Variable" = character(),
+                     "Hazard Ratio" = numeric(),
+                     "95%CI" = character(),
+                     "P value" = numeric())
+
+for (variable in c("age", "race", "marital_status", "t_stage", "n_stage", "x6th_stage", "differentiate", "grade", "a_stage", "tumor_size", "estrogen_status", "progesterone_status", "positive_ratio_transformed")) {
+  cox_formula <- as.formula(paste("surv_object ~", variable))
+  cox_model <- coxph(cox_formula, data = surv_data)
+  
+  variable_name <- variable
+  hazard_ratio <- exp(coef(cox_model))
+  ci_lower <- exp(confint(cox_model))[1]
+  ci_upper <- exp(confint(cox_model))[2]
+  p_value <- summary(cox_model)$coefficients[5]
+  
+  new_row <- data.frame("Variable" = variable_name,
+                        "Hazard Ratio" = hazard_ratio,
+                        "95% CI" = paste0("(", round(ci_lower, 2), "-", round(ci_upper, 2), ")"),
+                        "P value" = p_value,
+                        stringsAsFactors = FALSE)
+  
+  result_unicox <- rbind(result_unicox, new_row)
+}
+
+result_unicox = result_unicox |>
+  arrange(desc(`P.value`))
+
+
+knitr::kable(result_unicox, 
+             col.names = c("Variable", "Hazard Ratio", "95% CI", "P value"))
+```
+
+According to the univariate Cox regression analysis, the variables `age,` `a_stage,` `tumor_size,` `grade,` `progesterone_status,` `estrogen_status,` and `positive_ratio`are significantly associated with the survival outcome (p < 0.05).
+
+(Explain Hazard ratio... continuous/ categorical)
+
+## Multivariate Cox Regression Model
+
+```{r}
+result_use = result_unicox |>
+mutate(
+  significant = ifelse(result_unicox$P.value < 0.05,"significant","Not significant"))
+
+multi_cox <- result_use[result_use$significant == "significant",]$Variable
+
+formula <- as.formula(paste("Surv(survival_months, status) ~", paste(multi_cox, collapse = " + ")))
+
+multi_cox_model <- coxph(formula, data = surv_data)
+
+data_use <- summary(multi_cox_model)
+
+multi_cox_HR <- round(data_use$coefficients[,2],2)
+multi_cox_CI2.5 <- round(data_use$conf.int[,3],2)
+multi_cox_CI97.5 <- mul_CI95<-round(data_use$conf.int[,4],2)
+multi_cox_CI <- paste0('(',multi_cox_CI2.5,'-',multi_cox_CI97.5,')')
+multi_cox_P_value <- round(data_use$coefficients[,5],3)
+Variable <- row.names(data.frame(data_use$coefficients))
+multi_cox_result<- data.frame(Variable,multi_cox_HR,multi_cox_CI2.5,multi_cox_CI97.5,multi_cox_CI,multi_cox_P_value)
+
+knitr::kable(multi_cox_result)
+```
+
+```{r}
+ggplot(multi_cox_result, aes(multi_cox_HR, Variable)) + 
+  geom_vline(xintercept = 1,
+             linetype = "dashed",
+             size = 1) +
+  geom_errorbar(aes(xmin = multi_cox_CI2.5, xmax = multi_cox_CI97.5),width = 0.1) +
+  geom_point(aes(color = multi_cox_P_value),size = 5, shape = 18) +
+  scale_color_continuous(low = 'skyblue', high = 'red') +
+  labs(x = 'Hazard ratio', title = 'Forest plot for multivariate cox regression') +
+  theme_pubr() +
+  theme(legend.position = 'right')
+```
+According to the multivariate Cox regression analysis, the variables `age,` `a_stage,` `tumor_size,` `grade,` `progesterone_status,` `estrogen_status,` and `positive_ratio` are significantly associated with the survival outcome (p < 0.05).
+
+## Nomogram for Survival Prediction
+
+
+
