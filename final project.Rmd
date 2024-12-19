@@ -45,7 +45,7 @@ head(surv_data)
 library(survival)
 
 # Fit a Cox proportional hazards model
-cox_model <- coxph(Surv(survival_months, status) ~ age + race + marital_status + t_stage + n_stage + x6th_stage + differentiate + grade + a_stage + tumor_size + estrogen_status + progesterone_status + regional_node_examined + regional_node_positive, data = surv_data)
+cox_model <- coxph(Surv(survival_months, status) ~ age + race + marital_status + t_stage + n_stage + x6th_stage + differentiate + grade + a_stage + tumor_size + estrogen_status + progesterone_status + regional_node_examined + regional_node_positive+ positive_ratio, data = surv_data)
 
 # View model summary
 summary(cox_model)
@@ -55,7 +55,7 @@ NA coefficients; colliearity? -->
 remove these variables: x6th stage, grade
 
 ```{r}
-cox_2<- coxph(Surv(survival_months, status) ~ age + race + marital_status + t_stage + n_stage  + differentiate + a_stage + tumor_size + estrogen_status + progesterone_status + regional_node_examined + regional_node_positive, data = surv_data)
+cox_2<- coxph(Surv(survival_months, status) ~ age + race + marital_status + t_stage + n_stage  + differentiate + a_stage + tumor_size + estrogen_status + progesterone_status + regional_node_examined + regional_node_positive + positive_ratio, data = surv_data)
 
 # View model summary
 summary(cox_2)
@@ -76,7 +76,7 @@ concordance.index <- survConcordance(surv_object ~ predict(cox_2, type = "risk")
 print(concordance.index)
 
 ```
-0.744: acceptable discrimination. In 74% of the cases, the model correctly ranks pairs of individuals in terms of who experiences the event sooner
+0.75: acceptable discrimination. In 74% of the cases, the model correctly ranks pairs of individuals in terms of who experiences the event sooner
 
 
 # Assumptions:
@@ -100,7 +100,7 @@ print(ph_test)
 ```
 P values for a covariate < 0.5 --> suggests a violation of the proportion hazards assumption for that covariate. 
 
-** n_stage, a_stage, tumor_size, estrogen_status, progesterone status have p values smaller than 0.5. Should we exclude these? 
+** n_stage, a_stage, tumor_size, estrogen_status, progesterone status, positive ratio have p values smaller than 0.5. Should we exclude these? 
 
 If the residuals show a random scatter with no clear trend or pattern, it suggests that the proportional hazards assumption holds.
 If there is a visible pattern or trend, it indicates that the assumption might be violated for that covariate.
@@ -138,16 +138,52 @@ plot(surv_data$progesterone_status, martingale_residuals, main = "Martingale Res
      xlab = "covariate", ylab = "Martingale Residuals")
 ```
 
-Those variables could be time varying
-
+Trying stratification of n_stage and a_stage
 ```{r}
-cox_3 <- coxph(Surv(survival_months, status) ~ age + race + marital_status +
-               tt(n_stage) + tt(a_stage) + tt(tumor_size) + estrogen_status + 
-               progesterone_status + regional_node_examined + regional_node_positive, 
-               data = surv_data, 
-               tt = function(x, t, ...) x * log(t)) 
-## data contains an infinite predictor????
+cox_3 <- coxph(Surv(survival_months, status) ~ age + race + marital_status + 
+                          strata(n_stage) + strata(a_stage) + tumor_size + 
+                          estrogen_status + progesterone_status + 
+                          regional_node_examined + regional_node_positive + positive_ratio, 
+                          data = surv_data)
+
+summary(cox_3)
+
+#shoenfeld residual test
+ph_test <- cox.zph(cox_3)
+print(ph_test)
+
 ```
+
+Trying stratification of estrogen and progesterone
+```{r}
+cox_4 <- coxph(Surv(survival_months, status) ~ age + race + marital_status + 
+                          n_stage + a_stage + tumor_size + 
+                          strata(estrogen_status) + strata(progesterone_status) + 
+                          regional_node_examined + regional_node_positive + positive_ratio, 
+                          data = surv_data)
+
+summary(cox_4)
+
+#shoenfeld residual test
+ph_test <- cox.zph(cox_4)
+print(ph_test)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # influential points and leverage
 Use influence diagnostics (e.g., dfbetas, deviance residuals, or Cook's distance) to identify outliers or influential points.
