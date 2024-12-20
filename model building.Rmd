@@ -649,8 +649,8 @@ plot(cal_1,
      lwd = 2,
      lty = 1,
      errbar.col="blue",
-     xlab="Nomogram-Predicted Probabilityof 1 years OS",
-     ylab="Actua1 1 years OS",
+     xlab="Nomogram-Predicted Probabilityof 1 year OS",
+     ylab="Actua1 1 year OS",
      col="red",
      subtitles=F
      )
@@ -663,7 +663,7 @@ abline(0, 1, lty = 2, col = "gray")
 model_2 <- cph(surv_object ~ age + a_stage + tumor_size + grade + progesterone_status + estrogen_status + positive_ratio,
                    x = TRUE ,y = TRUE, surv = TRUE, time.inc = 4, data = surv_data)
 
-cal_2 <- calibrate(model_1,
+cal_2 <- calibrate(model_2,
                    cmethod = 'KM',
                    method = 'boot',
                    u = 4,
@@ -673,8 +673,8 @@ plot(cal_2,
      lwd = 2,
      lty = 1,
      errbar.col="blue",
-     xlab="Nomogram-Predicted Probabilityof 1 years OS",
-     ylab="Actua1 1 years OS",
+     xlab="Nomogram-Predicted Probabilityof 4 years OS",
+     ylab="Actua1 4 years OS",
      col="red",
      subtitles=F
      )
@@ -685,7 +685,7 @@ abline(0, 1, lty = 2, col = "gray")
 model_3 <- cph(surv_object ~ age + a_stage + tumor_size + grade + progesterone_status + estrogen_status + positive_ratio,
                    x = TRUE ,y = TRUE, surv = TRUE, time.inc = 8, data = surv_data)
 
-cal_3 <- calibrate(model_1,
+cal_3 <- calibrate(model_3,
                    cmethod = 'KM',
                    method = 'boot',
                    u = 8,
@@ -695,8 +695,8 @@ plot(cal_3,
      lwd = 2,
      lty = 1,
      errbar.col="blue",
-     xlab="Nomogram-Predicted Probabilityof 1 years OS",
-     ylab="Actua1 1 years OS",
+     xlab="Nomogram-Predicted Probabilityof 8 years OS",
+     ylab="Actua1 8 years OS",
      col="red",
      subtitles=F
      )
