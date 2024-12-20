@@ -516,8 +516,6 @@ knitr::kable(result_unicox,
 
 According to the univariate Cox regression analysis, the variables `age,` `a_stage,` `tumor_size,` `grade,` `progesterone_status,` `estrogen_status,` and `positive_ratio`are significantly associated with the survival outcome (p < 0.05).
 
-(Explain Hazard ratio... continuous/ categorical)
-
 ## Multivariate Cox Regression Model
 
 ```{r}
