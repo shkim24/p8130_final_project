@@ -560,5 +560,149 @@ According to the multivariate Cox regression analysis, the variables `age,` `a_s
 
 ## Nomogram for Survival Prediction
 
+```{r, warning=FALSE}
+dd <- datadist(surv_data)
+options(datadist = "dd")
 
+surv_data = surv_data %>%
+  mutate(survival_years = survival_months / 12)
+
+surv_object <- with(surv_data, Surv(survival_years, status == 1))
+
+final_model <- cph(surv_object ~ age + a_stage + tumor_size + grade + progesterone_status + estrogen_status + positive_ratio,
+                   x = TRUE ,y = TRUE, surv = TRUE, data = surv_data)
+
+surv =  Survival(final_model)
+
+surv_1y <- function(x)surv(1,lp=x)
+surv_4y <- function(x)surv(4,lp=x)
+surv_8y <- function(x)surv(8,lp=x)
+
+Nomogram_1 <- nomogram(final_model,fun = list(surv_1y,surv_4y,surv_8y),lp=F,
+                       funlabel = c('1 year survival rate','4 year survival rate','8 year survival rate'),
+                       maxscale = 100,fun.at = c(0.1,seq(0.1,0.9,by=0.1),0.90))
+
+plot(Nomogram_1, 
+     cex.axis = 0.4,
+     cex.var = 0.8,
+     cex = 0.8, 
+     lmgp = 0.3,            # 减小标签与轴线距离
+     label.offset = 0.2,    # 增加标签偏移量
+     points.label = "Points",
+     total.points.label = "Total Points",
+     col.grid = gray(c(0.8, 0.95)),
+     labels.right = FALSE,
+     width.max = 1000,
+     height.max = 800,
+     mar = c(4, 4, 4, 4)    # 增加边距
+)
+```
+## ROC curve
+```{r, warning=FALSE}
+pred <- predict(final_model, type="lp")
+
+ROC_table <- data.frame(time = surv_data[,"survival_years"], status = surv_data[,"status"], score = pred)
+
+time_roc_res <- timeROC(T = ROC_table$survival_years,
+                        delta = ROC_table$status,
+                        marker = ROC_table$score,
+                        cause = 1,
+                        weighting="marginal",
+                        times = c(1, 4, 8),
+                        ROC = TRUE,
+                        iid = TRUE
+                        )
+
+time_ROC_df <- data.frame(TP_1year = time_roc_res$TP[, 1],
+                          FP_1year = time_roc_res$FP[, 1],
+                          TP_4year = time_roc_res$TP[, 2],
+                          FP_4year = time_roc_res$FP[, 2],
+                          TP_8year = time_roc_res$TP[, 3],
+                          FP_8year = time_roc_res$FP[, 3]
+                          )
+
+ggplot(data = time_ROC_df) +
+  geom_line(aes(x = FP_1year, y = TP_1year), size = 1, color = "#0067B5") +
+  geom_line(aes(x = FP_4year, y = TP_4year), size = 1, color = "#09891D") +
+  geom_line(aes(x = FP_8year, y = TP_8year), size = 1, color = "#BC1328") +
+  geom_abline(slope = 1, intercept = 0, color = "grey", size = 1, linetype = 2) +
+  theme_bw() +
+  annotate("text",x = 0.75, y = 0.20, size = 4.5,label = paste0("AUC of 1-year survival = ", sprintf("%.3f", time_roc_res$AUC[[1]])), color = "#0067B5") +
+  annotate("text",x = 0.75, y = 0.15, size = 4.5,label = paste0("AUC of 4-year survival = ", sprintf("%.3f", time_roc_res$AUC[[2]])), color = "#09891D") +
+  annotate("text",x = 0.75, y = 0.10, size = 4.5,label = paste0("AUC of 8-year survival = ", sprintf("%.3f", time_roc_res$AUC[[3]])), color = "#BC1328") +
+  labs(x = "1-specificity", y = "Sensitivity") +
+  theme(axis.text = element_text(face = "bold", size = 11, color = "black"),
+        axis.title.x = element_text(face = "bold", size = 14, color = "black", margin = margin(c(15, 0, 0, 0))),
+        axis.title.y = element_text(face = "bold", size = 14, color = "black", margin = margin(c(0, 15, 0, 0))))
+```
+
+
+```{r, wearning=FALSE}
+model_1 <- cph(surv_object ~ age + a_stage + tumor_size + grade + progesterone_status + estrogen_status + positive_ratio,
+                   x = TRUE ,y = TRUE, surv = TRUE, time.inc = 1, data = surv_data)
+
+cal_1 <- calibrate(model_1,
+                   cmethod = 'KM',
+                   method = 'boot',
+                   u = 1,
+                   B = 1000)
+
+plot(cal_1,
+     lwd = 2,
+     lty = 1,
+     errbar.col="blue",
+     xlab="Nomogram-Predicted Probabilityof 1 years OS",
+     ylab="Actua1 1 years OS",
+     col="red",
+     subtitles=F
+     )
+
+abline(0, 1, lty = 2, col = "gray")
+```
+
+
+```{r, warning=FALSE}
+model_2 <- cph(surv_object ~ age + a_stage + tumor_size + grade + progesterone_status + estrogen_status + positive_ratio,
+                   x = TRUE ,y = TRUE, surv = TRUE, time.inc = 4, data = surv_data)
+
+cal_2 <- calibrate(model_1,
+                   cmethod = 'KM',
+                   method = 'boot',
+                   u = 4,
+                   B = 1000)
+
+plot(cal_2,
+     lwd = 2,
+     lty = 1,
+     errbar.col="blue",
+     xlab="Nomogram-Predicted Probabilityof 1 years OS",
+     ylab="Actua1 1 years OS",
+     col="red",
+     subtitles=F
+     )
+
+abline(0, 1, lty = 2, col = "gray")
+```
+```{r, warning=FALSE}
+model_3 <- cph(surv_object ~ age + a_stage + tumor_size + grade + progesterone_status + estrogen_status + positive_ratio,
+                   x = TRUE ,y = TRUE, surv = TRUE, time.inc = 8, data = surv_data)
+
+cal_3 <- calibrate(model_1,
+                   cmethod = 'KM',
+                   method = 'boot',
+                   u = 8,
+                   B = 1000)
+
+plot(cal_3,
+     lwd = 2,
+     lty = 1,
+     errbar.col="blue",
+     xlab="Nomogram-Predicted Probabilityof 1 years OS",
+     ylab="Actua1 1 years OS",
+     col="red",
+     subtitles=F
+     )
+
+abline(0, 1, lty = 2, col = "gray")
+```
 
